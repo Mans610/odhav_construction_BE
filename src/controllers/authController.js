@@ -3,6 +3,27 @@ const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const { successResponse, errorResponse } = require('../utils/response');
 
+// Helper function to handle both MySQL and PostgreSQL results
+const getRows = (result) => {
+  // PostgreSQL returns { rows: [...] }
+  // MySQL returns [[...], metadata]
+  return result.rows || result[0];
+};
+
+// Helper function to convert MySQL query to PostgreSQL
+const convertQuery = (sql, params) => {
+  const isPostgres = !!process.env.DATABASE_URL;
+  
+  if (isPostgres) {
+    // Convert ? to $1, $2, $3, etc.
+    let paramIndex = 1;
+    const convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+    return { sql: convertedSql, params };
+  }
+  
+  return { sql, params };
+};
+
 // Login
 exports.login = async (req, res) => {
   try {
@@ -14,10 +35,13 @@ exports.login = async (req, res) => {
     }
 
     // Check if user exists
-    const [users] = await db.query(
-      'SELECT * FROM users WHERE username = ? AND is_active = TRUE',
-      [username]
+    const { sql, params } = convertQuery(
+      'SELECT * FROM users WHERE username = ? AND is_active = ?',
+      [username, true]  // Use true instead of TRUE for PostgreSQL
     );
+    
+    const result = await db.query(sql, params);
+    const users = getRows(result);
 
     if (users.length === 0) {
       return errorResponse(res, 'Invalid credentials', 401);
@@ -27,8 +51,9 @@ exports.login = async (req, res) => {
 
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password);
-    console.log("password=====",password);
-    console.log("password=====",user.password);
+    console.log("password=====", password);
+    console.log("user.password=====", user.password);
+    
     if (!isPasswordValid) {
       return errorResponse(res, 'Invalid credentials', 401);
     }
@@ -39,8 +64,8 @@ exports.login = async (req, res) => {
         id: user.id, 
         username: user.username 
       },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE }
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: process.env.JWT_EXPIRE || '24h' }
     );
 
     // Remove password from response
@@ -56,6 +81,7 @@ exports.login = async (req, res) => {
     errorResponse(res, 'Login failed', 500);
   }
 };
+
 exports.createUser = async (req, res) => {
   try {
     const { username, password, full_name, phone } = req.body;
@@ -67,32 +93,62 @@ exports.createUser = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const [result] = await db.query(
+    const { sql: insertSql, params: insertParams } = convertQuery(
       'INSERT INTO users (username, password, full_name, phone) VALUES (?, ?, ?, ?)',
       [username, hashedPassword, full_name, phone]
     );
 
-    const [newUser] = await db.query(
+    const insertResult = await db.query(insertSql, insertParams);
+    
+    // Get the inserted user ID
+    // PostgreSQL: insertResult.rows[0].id (if using RETURNING id)
+    // MySQL: insertResult[0].insertId
+    let userId;
+    const isPostgres = !!process.env.DATABASE_URL;
+    
+    if (isPostgres) {
+      // For PostgreSQL, we need to use RETURNING clause
+      const { sql: pgInsertSql, params: pgInsertParams } = convertQuery(
+        'INSERT INTO users (username, password, full_name, phone) VALUES (?, ?, ?, ?) RETURNING id',
+        [username, hashedPassword, full_name, phone]
+      );
+      const pgResult = await db.query(pgInsertSql, pgInsertParams);
+      userId = pgResult.rows[0].id;
+    } else {
+      userId = insertResult[0].insertId;
+    }
+
+    const { sql: selectSql, params: selectParams } = convertQuery(
       'SELECT id, username, full_name, phone, is_active, created_at FROM users WHERE id = ?',
-      [result.insertId]
+      [userId]
     );
+
+    const selectResult = await db.query(selectSql, selectParams);
+    const newUser = getRows(selectResult);
 
     successResponse(res, newUser[0], 'User created successfully', 201);
   } catch (error) {
     console.error('Create user error:', error);
-    if (error.code === 'ER_DUP_ENTRY') {
+    
+    // Handle duplicate entry errors for both databases
+    if (error.code === 'ER_DUP_ENTRY' || error.code === '23505') {
       return errorResponse(res, 'Username already exists', 400);
     }
+    
     errorResponse(res, 'Failed to create user', 500);
   }
 };
+
 // Get current user profile
 exports.getProfile = async (req, res) => {
   try {
-    const [users] = await db.query(
+    const { sql, params } = convertQuery(
       'SELECT id, username, full_name, phone, is_active, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
+
+    const result = await db.query(sql, params);
+    const users = getRows(result);
 
     if (users.length === 0) {
       return errorResponse(res, 'User not found', 404);
