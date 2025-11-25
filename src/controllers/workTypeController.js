@@ -4,9 +4,10 @@ const { successResponse, errorResponse } = require('../utils/response');
 // Get all work types
 exports.getAllWorkTypes = async (req, res) => {
   try {
-    const [workTypes] = await db.query(
+    const result = await db.query(
       'SELECT * FROM work_types WHERE is_active = TRUE ORDER BY work_name'
     );
+    const workTypes = result.rows;
     successResponse(res, workTypes, 'Work types retrieved successfully');
   } catch (error) {
     console.error('Get work types error:', error);
@@ -17,10 +18,11 @@ exports.getAllWorkTypes = async (req, res) => {
 // Get single work type
 exports.getWorkTypeById = async (req, res) => {
   try {
-    const [workTypes] = await db.query(
-      'SELECT * FROM work_types WHERE id = ? AND is_active = TRUE',
+    const result = await db.query(
+      'SELECT * FROM work_types WHERE id = $1 AND is_active = TRUE',
       [req.params.id]
     );
+    const workTypes = result.rows;
 
     if (workTypes.length === 0) {
       return errorResponse(res, 'Work type not found', 404);
@@ -42,12 +44,13 @@ exports.createWorkType = async (req, res) => {
       return errorResponse(res, 'Work name and unit are required', 400);
     }
 
-    const [result] = await db.query(
-      'INSERT INTO work_types (work_name, unit, parameter) VALUES (?, ?, ?)',
+    const result = await db.query(
+      'INSERT INTO work_types (work_name, unit, parameter) VALUES ($1, $2, $3) RETURNING id',
       [work_name, unit, parameter || 'Structure']
     );
 
-    const [newWorkType] = await db.query('SELECT * FROM work_types WHERE id = ?', [result.insertId]);
+    const newWorkTypeResult = await db.query('SELECT * FROM work_types WHERE id = $1', [result.rows[0].id]);
+    const newWorkType = newWorkTypeResult.rows;
 
     successResponse(res, newWorkType[0], 'Work type created successfully', 201);
   } catch (error) {
@@ -62,16 +65,17 @@ exports.updateWorkType = async (req, res) => {
     const { work_name, unit, parameter } = req.body;
     const { id } = req.params;
 
-    const [result] = await db.query(
-      'UPDATE work_types SET work_name = ?, unit = ?, parameter = ? WHERE id = ?',
+    const result = await db.query(
+      'UPDATE work_types SET work_name = $1, unit = $2, parameter = $3 WHERE id = $4',
       [work_name, unit, parameter, id]
     );
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Work type not found', 404);
     }
 
-    const [updatedWorkType] = await db.query('SELECT * FROM work_types WHERE id = ?', [id]);
+    const updatedWorkTypeResult = await db.query('SELECT * FROM work_types WHERE id = $1', [id]);
+    const updatedWorkType = updatedWorkTypeResult.rows;
 
     successResponse(res, updatedWorkType[0], 'Work type updated successfully');
   } catch (error) {
@@ -83,12 +87,12 @@ exports.updateWorkType = async (req, res) => {
 // Delete work type (soft delete)
 exports.deleteWorkType = async (req, res) => {
   try {
-    const [result] = await db.query(
-      'UPDATE work_types SET is_active = FALSE WHERE id = ?',
+    const result = await db.query(
+      'UPDATE work_types SET is_active = FALSE WHERE id = $1',
       [req.params.id]
     );
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Work type not found', 404);
     }
 

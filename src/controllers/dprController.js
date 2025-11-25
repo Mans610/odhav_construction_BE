@@ -14,35 +14,42 @@ exports.getAllDPR = async (req, res) => {
       WHERE 1=1
     `;
     const params = [];
+    let paramIndex = 1;
 
     if (site_id) {
-      query += ' AND d.site_id = ?';
+      query += ` AND d.site_id = $${paramIndex}`;
       params.push(site_id);
+      paramIndex++;
     }
 
     if (work_type_id) {
-      query += ' AND d.work_type_id = ?';
+      query += ` AND d.work_type_id = $${paramIndex}`;
       params.push(work_type_id);
+      paramIndex++;
     }
 
     if (date) {
-      query += ' AND d.date = ?';
+      query += ` AND d.date = $${paramIndex}`;
       params.push(date);
+      paramIndex++;
     }
 
     if (start_date) {
-      query += ' AND d.date >= ?';
+      query += ` AND d.date >= $${paramIndex}`;
       params.push(start_date);
+      paramIndex++;
     }
 
     if (end_date) {
-      query += ' AND d.date <= ?';
+      query += ` AND d.date <= $${paramIndex}`;
       params.push(end_date);
+      paramIndex++;
     }
 
     query += ' ORDER BY d.date DESC, d.created_at DESC';
 
-    const [dpr] = await db.query(query, params);
+    const result = await db.query(query, params);
+    const dpr = result.rows;
     successResponse(res, dpr, 'DPR retrieved successfully');
   } catch (error) {
     console.error('Get DPR error:', error);
@@ -53,14 +60,15 @@ exports.getAllDPR = async (req, res) => {
 // Get single DPR
 exports.getDPRById = async (req, res) => {
   try {
-    const [dpr] = await db.query(
+    const result = await db.query(
       `SELECT d.*, s.site_name, w.work_name, w.unit 
        FROM dpr d 
        INNER JOIN sites s ON d.site_id = s.id 
        INNER JOIN work_types w ON d.work_type_id = w.id 
-       WHERE d.id = ?`,
+       WHERE d.id = $1`,
       [req.params.id]
     );
+    const dpr = result.rows;
 
     if (dpr.length === 0) {
       return errorResponse(res, 'DPR not found', 404);
@@ -84,19 +92,20 @@ exports.createDPR = async (req, res) => {
 
     const photo = req.file ? req.file.path : null;
 
-    const [result] = await db.query(
-      'INSERT INTO dpr (site_id, work_type_id, date, structure_name, quantity, remarks, photo) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    const result = await db.query(
+      'INSERT INTO dpr (site_id, work_type_id, date, structure_name, quantity, remarks, photo) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
       [site_id, work_type_id, date, structure_name, quantity, remarks, photo]
     );
 
-    const [newDPR] = await db.query(
+    const newDPRResult = await db.query(
       `SELECT d.*, s.site_name, w.work_name, w.unit 
        FROM dpr d 
        INNER JOIN sites s ON d.site_id = s.id 
        INNER JOIN work_types w ON d.work_type_id = w.id 
-       WHERE d.id = ?`,
-      [result.insertId]
+       WHERE d.id = $1`,
+      [result.rows[0].id]
     );
+    const newDPR = newDPRResult.rows;
 
     successResponse(res, newDPR[0], 'DPR created successfully', 201);
   } catch (error) {
@@ -111,31 +120,34 @@ exports.updateDPR = async (req, res) => {
     const { site_id, work_type_id, date, structure_name, quantity, remarks } = req.body;
     const { id } = req.params;
 
-    let query = 'UPDATE dpr SET site_id = ?, work_type_id = ?, date = ?, structure_name = ?, quantity = ?, remarks = ?';
+    let query = 'UPDATE dpr SET site_id = $1, work_type_id = $2, date = $3, structure_name = $4, quantity = $5, remarks = $6';
     const params = [site_id, work_type_id, date, structure_name, quantity, remarks];
+    let paramIndex = 7;
 
     if (req.file) {
-      query += ', photo = ?';
+      query += `, photo = $${paramIndex}`;
       params.push(req.file.path);
+      paramIndex++;
     }
 
-    query += ' WHERE id = ?';
+    query += ` WHERE id = $${paramIndex}`;
     params.push(id);
 
-    const [result] = await db.query(query, params);
+    const result = await db.query(query, params);
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'DPR not found', 404);
     }
 
-    const [updatedDPR] = await db.query(
+    const updatedDPRResult = await db.query(
       `SELECT d.*, s.site_name, w.work_name, w.unit 
        FROM dpr d 
        INNER JOIN sites s ON d.site_id = s.id 
        INNER JOIN work_types w ON d.work_type_id = w.id 
-       WHERE d.id = ?`,
+       WHERE d.id = $1`,
       [id]
     );
+    const updatedDPR = updatedDPRResult.rows;
 
     successResponse(res, updatedDPR[0], 'DPR updated successfully');
   } catch (error) {
@@ -147,9 +159,9 @@ exports.updateDPR = async (req, res) => {
 // Delete DPR
 exports.deleteDPR = async (req, res) => {
   try {
-    const [result] = await db.query('DELETE FROM dpr WHERE id = ?', [req.params.id]);
+    const result = await db.query('DELETE FROM dpr WHERE id = $1', [req.params.id]);
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'DPR not found', 404);
     }
 
@@ -177,23 +189,27 @@ exports.getDPRSummary = async (req, res) => {
         COUNT(d.id) as entry_count
       FROM dpr d 
       INNER JOIN work_types w ON d.work_type_id = w.id 
-      WHERE d.site_id = ?
+      WHERE d.site_id = $1
     `;
     const params = [site_id];
+    let paramIndex = 2;
 
     if (start_date) {
-      query += ' AND d.date >= ?';
+      query += ` AND d.date >= $${paramIndex}`;
       params.push(start_date);
+      paramIndex++;
     }
 
     if (end_date) {
-      query += ' AND d.date <= ?';
+      query += ` AND d.date <= $${paramIndex}`;
       params.push(end_date);
+      paramIndex++;
     }
 
     query += ' GROUP BY d.work_type_id, w.work_name, w.unit ORDER BY w.work_name';
 
-    const [summary] = await db.query(query, params);
+    const result = await db.query(query, params);
+    const summary = result.rows;
 
     successResponse(res, summary, 'DPR summary retrieved successfully');
   } catch (error) {
@@ -211,16 +227,17 @@ exports.getCumulativeProgress = async (req, res) => {
       return errorResponse(res, 'Site ID and work type ID are required', 400);
     }
 
-    const [progress] = await db.query(
+    const result = await db.query(
       `SELECT 
         structure_name,
         SUM(quantity) as total_quantity
       FROM dpr 
-      WHERE site_id = ? AND work_type_id = ?
+      WHERE site_id = $1 AND work_type_id = $2
       GROUP BY structure_name
       ORDER BY structure_name`,
       [site_id, work_type_id]
     );
+    const progress = result.rows;
 
     successResponse(res, progress, 'Cumulative progress retrieved successfully');
   } catch (error) {

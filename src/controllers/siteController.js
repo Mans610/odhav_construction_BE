@@ -4,9 +4,10 @@ const { successResponse, errorResponse } = require('../utils/response');
 // Get all sites
 exports.getAllSites = async (req, res) => {
   try {
-    const [sites] = await db.query(
+    const result = await db.query(
       'SELECT * FROM sites WHERE is_active = TRUE ORDER BY created_at DESC'
     );
+    const sites = result.rows;
     successResponse(res, sites, 'Sites retrieved successfully');
   } catch (error) {
     console.error('Get sites error:', error);
@@ -17,10 +18,11 @@ exports.getAllSites = async (req, res) => {
 // Get single site
 exports.getSiteById = async (req, res) => {
   try {
-    const [sites] = await db.query(
-      'SELECT * FROM sites WHERE id = ? AND is_active = TRUE',
+    const result = await db.query(
+      'SELECT * FROM sites WHERE id = $1 AND is_active = TRUE',
       [req.params.id]
     );
+    const sites = result.rows;
 
     if (sites.length === 0) {
       return errorResponse(res, 'Site not found', 404);
@@ -42,12 +44,13 @@ exports.createSite = async (req, res) => {
       return errorResponse(res, 'Site name is required', 400);
     }
 
-    const [result] = await db.query(
-      'INSERT INTO sites (site_name, site_address, start_date, notes) VALUES (?, ?, ?, ?)',
+    const result = await db.query(
+      'INSERT INTO sites (site_name, site_address, start_date, notes) VALUES ($1, $2, $3, $4) RETURNING id',
       [site_name, site_address, start_date, notes]
     );
 
-    const [newSite] = await db.query('SELECT * FROM sites WHERE id = ?', [result.insertId]);
+    const newSiteResult = await db.query('SELECT * FROM sites WHERE id = $1', [result.rows[0].id]);
+    const newSite = newSiteResult.rows;
 
     successResponse(res, newSite[0], 'Site created successfully', 201);
   } catch (error) {
@@ -62,16 +65,17 @@ exports.updateSite = async (req, res) => {
     const { site_name, site_address, start_date, notes } = req.body;
     const { id } = req.params;
 
-    const [result] = await db.query(
-      'UPDATE sites SET site_name = ?, site_address = ?, start_date = ?, notes = ? WHERE id = ?',
+    const result = await db.query(
+      'UPDATE sites SET site_name = $1, site_address = $2, start_date = $3, notes = $4 WHERE id = $5',
       [site_name, site_address, start_date, notes, id]
     );
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Site not found', 404);
     }
 
-    const [updatedSite] = await db.query('SELECT * FROM sites WHERE id = ?', [id]);
+    const updatedSiteResult = await db.query('SELECT * FROM sites WHERE id = $1', [id]);
+    const updatedSite = updatedSiteResult.rows;
 
     successResponse(res, updatedSite[0], 'Site updated successfully');
   } catch (error) {
@@ -83,12 +87,12 @@ exports.updateSite = async (req, res) => {
 // Delete site (soft delete)
 exports.deleteSite = async (req, res) => {
   try {
-    const [result] = await db.query(
-      'UPDATE sites SET is_active = FALSE WHERE id = ?',
+    const result = await db.query(
+      'UPDATE sites SET is_active = FALSE WHERE id = $1',
       [req.params.id]
     );
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Site not found', 404);
     }
 
@@ -105,28 +109,32 @@ exports.getSiteStats = async (req, res) => {
     const { id } = req.params;
 
     // Get total staff
-    const [staffCount] = await db.query(
-      'SELECT COUNT(*) as total FROM staff WHERE site_id = ? AND is_active = TRUE',
+    const staffCountResult = await db.query(
+      'SELECT COUNT(*) as total FROM staff WHERE site_id = $1 AND is_active = TRUE',
       [id]
     );
+    const staffCount = staffCountResult.rows;
 
     // Get total inventory items
-    const [inventoryCount] = await db.query(
-      'SELECT COUNT(*) as total FROM inventory WHERE site_id = ?',
+    const inventoryCountResult = await db.query(
+      'SELECT COUNT(*) as total FROM inventory WHERE site_id = $1',
       [id]
     );
+    const inventoryCount = inventoryCountResult.rows;
 
     // Get recent DPR entries
-    const [recentDPR] = await db.query(
-      'SELECT COUNT(*) as total FROM dpr WHERE site_id = ? AND date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)',
+    const recentDPRResult = await db.query(
+      "SELECT COUNT(*) as total FROM dpr WHERE site_id = $1 AND date >= CURRENT_DATE - INTERVAL '7 days'",
       [id]
     );
+    const recentDPR = recentDPRResult.rows;
 
     // Get today's attendance
-    const [todayAttendance] = await db.query(
-      'SELECT COUNT(*) as total FROM attendance WHERE site_id = ? AND date = CURDATE()',
+    const todayAttendanceResult = await db.query(
+      'SELECT COUNT(*) as total FROM attendance WHERE site_id = $1 AND date = CURRENT_DATE',
       [id]
     );
+    const todayAttendance = todayAttendanceResult.rows;
 
     successResponse(res, {
       total_staff: staffCount[0].total,

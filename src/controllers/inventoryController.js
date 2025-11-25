@@ -13,30 +13,36 @@ exports.getAllInventory = async (req, res) => {
       WHERE 1=1
     `;
     const params = [];
+    let paramIndex = 1;
 
     if (site_id) {
-      query += ' AND i.site_id = ?';
+      query += ` AND i.site_id = $${paramIndex}`;
       params.push(site_id);
+      paramIndex++;
     }
 
     if (type) {
-      query += ' AND i.type = ?';
+      query += ` AND i.type = $${paramIndex}`;
       params.push(type);
+      paramIndex++;
     }
 
     if (start_date) {
-      query += ' AND i.date >= ?';
+      query += ` AND i.date >= $${paramIndex}`;
       params.push(start_date);
+      paramIndex++;
     }
 
     if (end_date) {
-      query += ' AND i.date <= ?';
+      query += ` AND i.date <= $${paramIndex}`;
       params.push(end_date);
+      paramIndex++;
     }
 
     query += ' ORDER BY i.date DESC, i.created_at DESC';
 
-    const [inventory] = await db.query(query, params);
+    const result = await db.query(query, params);
+    const inventory = result.rows;
     successResponse(res, inventory, 'Inventory retrieved successfully');
   } catch (error) {
     console.error('Get inventory error:', error);
@@ -47,13 +53,14 @@ exports.getAllInventory = async (req, res) => {
 // Get single inventory
 exports.getInventoryById = async (req, res) => {
   try {
-    const [inventory] = await db.query(
+    const result = await db.query(
       `SELECT i.*, s.site_name 
        FROM inventory i 
        INNER JOIN sites s ON i.site_id = s.id 
-       WHERE i.id = ?`,
+       WHERE i.id = $1`,
       [req.params.id]
     );
+    const inventory = result.rows;
 
     if (inventory.length === 0) {
       return errorResponse(res, 'Inventory not found', 404);
@@ -77,18 +84,19 @@ exports.createInventory = async (req, res) => {
 
     const receipt_image = req.file ? req.file.path : null;
 
-    const [result] = await db.query(
-      'INSERT INTO inventory (site_id, material_name, quantity, type, date, description, receipt_image) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    const result = await db.query(
+      'INSERT INTO inventory (site_id, material_name, quantity, type, date, description, receipt_image) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
       [site_id, material_name, quantity, type, date, description, receipt_image]
     );
 
-    const [newInventory] = await db.query(
+    const newInventoryResult = await db.query(
       `SELECT i.*, s.site_name 
        FROM inventory i 
        INNER JOIN sites s ON i.site_id = s.id 
-       WHERE i.id = ?`,
-      [result.insertId]
+       WHERE i.id = $1`,
+      [result.rows[0].id]
     );
+    const newInventory = newInventoryResult.rows;
 
     successResponse(res, newInventory[0], 'Inventory created successfully', 201);
   } catch (error) {
@@ -103,30 +111,33 @@ exports.updateInventory = async (req, res) => {
     const { site_id, material_name, quantity, type, date, description } = req.body;
     const { id } = req.params;
 
-    let query = 'UPDATE inventory SET site_id = ?, material_name = ?, quantity = ?, type = ?, date = ?, description = ?';
+    let query = 'UPDATE inventory SET site_id = $1, material_name = $2, quantity = $3, type = $4, date = $5, description = $6';
     const params = [site_id, material_name, quantity, type, date, description];
+    let paramIndex = 7;
 
     if (req.file) {
-      query += ', receipt_image = ?';
+      query += `, receipt_image = $${paramIndex}`;
       params.push(req.file.path);
+      paramIndex++;
     }
 
-    query += ' WHERE id = ?';
+    query += ` WHERE id = $${paramIndex}`;
     params.push(id);
 
-    const [result] = await db.query(query, params);
+    const result = await db.query(query, params);
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Inventory not found', 404);
     }
 
-    const [updatedInventory] = await db.query(
+    const updatedInventoryResult = await db.query(
       `SELECT i.*, s.site_name 
        FROM inventory i 
        INNER JOIN sites s ON i.site_id = s.id 
-       WHERE i.id = ?`,
+       WHERE i.id = $1`,
       [id]
     );
+    const updatedInventory = updatedInventoryResult.rows;
 
     successResponse(res, updatedInventory[0], 'Inventory updated successfully');
   } catch (error) {
@@ -138,9 +149,9 @@ exports.updateInventory = async (req, res) => {
 // Delete inventory
 exports.deleteInventory = async (req, res) => {
   try {
-    const [result] = await db.query('DELETE FROM inventory WHERE id = ?', [req.params.id]);
+    const result = await db.query('DELETE FROM inventory WHERE id = $1', [req.params.id]);
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Inventory not found', 404);
     }
 
@@ -156,7 +167,7 @@ exports.getInventorySummary = async (req, res) => {
   try {
     const { site_id } = req.params;
 
-    const [summary] = await db.query(
+    const result = await db.query(
       `SELECT 
         material_name,
         SUM(CASE WHEN type = 'Incoming' THEN quantity ELSE 0 END) as total_incoming,
@@ -164,11 +175,12 @@ exports.getInventorySummary = async (req, res) => {
         (SUM(CASE WHEN type = 'Incoming' THEN quantity ELSE 0 END) - 
          SUM(CASE WHEN type = 'Outgoing' THEN quantity ELSE 0 END)) as current_stock
       FROM inventory 
-      WHERE site_id = ?
+      WHERE site_id = $1
       GROUP BY material_name
       ORDER BY material_name`,
       [site_id]
     );
+    const summary = result.rows;
 
     successResponse(res, summary, 'Inventory summary retrieved successfully');
   } catch (error) {

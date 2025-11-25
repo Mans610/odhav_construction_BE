@@ -14,35 +14,42 @@ exports.getAllAttendance = async (req, res) => {
       WHERE 1=1
     `;
     const params = [];
+    let paramIndex = 1;
 
     if (site_id) {
-      query += ' AND a.site_id = ?';
+      query += ` AND a.site_id = $${paramIndex}`;
       params.push(site_id);
+      paramIndex++;
     }
 
     if (staff_id) {
-      query += ' AND a.staff_id = ?';
+      query += ` AND a.staff_id = $${paramIndex}`;
       params.push(staff_id);
+      paramIndex++;
     }
 
     if (date) {
-      query += ' AND a.date = ?';
+      query += ` AND a.date = $${paramIndex}`;
       params.push(date);
+      paramIndex++;
     }
 
     if (start_date) {
-      query += ' AND a.date >= ?';
+      query += ` AND a.date >= $${paramIndex}`;
       params.push(start_date);
+      paramIndex++;
     }
 
     if (end_date) {
-      query += ' AND a.date <= ?';
+      query += ` AND a.date <= $${paramIndex}`;
       params.push(end_date);
+      paramIndex++;
     }
 
     query += ' ORDER BY a.date DESC, a.created_at DESC';
 
-    const [attendance] = await db.query(query, params);
+    const result = await db.query(query, params);
+    const attendance = result.rows;
     successResponse(res, attendance, 'Attendance retrieved successfully');
   } catch (error) {
     console.error('Get attendance error:', error);
@@ -53,14 +60,15 @@ exports.getAllAttendance = async (req, res) => {
 // Get single attendance
 exports.getAttendanceById = async (req, res) => {
   try {
-    const [attendance] = await db.query(
+    const result = await db.query(
       `SELECT a.*, s.staff_name, s.role, st.site_name 
        FROM attendance a 
        INNER JOIN staff s ON a.staff_id = s.id 
        INNER JOIN sites st ON a.site_id = st.id 
-       WHERE a.id = ?`,
+       WHERE a.id = $1`,
       [req.params.id]
     );
+    const attendance = result.rows;
 
     if (attendance.length === 0) {
       return errorResponse(res, 'Attendance not found', 404);
@@ -84,24 +92,25 @@ exports.createAttendance = async (req, res) => {
 
     const photo = req.file ? req.file.path : null;
 
-    const [result] = await db.query(
-      'INSERT INTO attendance (staff_id, site_id, date, status, notes, photo) VALUES (?, ?, ?, ?, ?, ?)',
+    const result = await db.query(
+      'INSERT INTO attendance (staff_id, site_id, date, status, notes, photo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
       [staff_id, site_id, date, status, notes, photo]
     );
 
-    const [newAttendance] = await db.query(
+    const newAttendanceResult = await db.query(
       `SELECT a.*, s.staff_name, s.role, st.site_name 
        FROM attendance a 
        INNER JOIN staff s ON a.staff_id = s.id 
        INNER JOIN sites st ON a.site_id = st.id 
-       WHERE a.id = ?`,
-      [result.insertId]
+       WHERE a.id = $1`,
+      [result.rows[0].id]
     );
+    const newAttendance = newAttendanceResult.rows;
 
     successResponse(res, newAttendance[0], 'Attendance created successfully', 201);
   } catch (error) {
     console.error('Create attendance error:', error);
-    if (error.code === 'ER_DUP_ENTRY') {
+    if (error.code === '23505') { // PostgreSQL unique violation
       return errorResponse(res, 'Attendance already marked for this staff on this date', 400);
     }
     errorResponse(res, 'Failed to create attendance', 500);
@@ -114,31 +123,34 @@ exports.updateAttendance = async (req, res) => {
     const { staff_id, site_id, date, status, notes } = req.body;
     const { id } = req.params;
 
-    let query = 'UPDATE attendance SET staff_id = ?, site_id = ?, date = ?, status = ?, notes = ?';
+    let query = 'UPDATE attendance SET staff_id = $1, site_id = $2, date = $3, status = $4, notes = $5';
     const params = [staff_id, site_id, date, status, notes];
+    let paramIndex = 6;
 
     if (req.file) {
-      query += ', photo = ?';
+      query += `, photo = $${paramIndex}`;
       params.push(req.file.path);
+      paramIndex++;
     }
 
-    query += ' WHERE id = ?';
+    query += ` WHERE id = $${paramIndex}`;
     params.push(id);
 
-    const [result] = await db.query(query, params);
+    const result = await db.query(query, params);
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Attendance not found', 404);
     }
 
-    const [updatedAttendance] = await db.query(
+    const updatedAttendanceResult = await db.query(
       `SELECT a.*, s.staff_name, s.role, st.site_name 
        FROM attendance a 
        INNER JOIN staff s ON a.staff_id = s.id 
        INNER JOIN sites st ON a.site_id = st.id 
-       WHERE a.id = ?`,
+       WHERE a.id = $1`,
       [id]
     );
+    const updatedAttendance = updatedAttendanceResult.rows;
 
     successResponse(res, updatedAttendance[0], 'Attendance updated successfully');
   } catch (error) {
@@ -150,9 +162,9 @@ exports.updateAttendance = async (req, res) => {
 // Delete attendance
 exports.deleteAttendance = async (req, res) => {
   try {
-    const [result] = await db.query('DELETE FROM attendance WHERE id = ?', [req.params.id]);
+    const result = await db.query('DELETE FROM attendance WHERE id = $1', [req.params.id]);
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       return errorResponse(res, 'Attendance not found', 404);
     }
 
@@ -172,15 +184,16 @@ exports.getAttendanceSummary = async (req, res) => {
       return errorResponse(res, 'Site ID, start date, and end date are required', 400);
     }
 
-    const [summary] = await db.query(
+    const result = await db.query(
       `SELECT 
         status,
         COUNT(*) as count
       FROM attendance 
-      WHERE site_id = ? AND date BETWEEN ? AND ?
+      WHERE site_id = $1 AND date BETWEEN $2 AND $3
       GROUP BY status`,
       [site_id, start_date, end_date]
     );
+    const summary = result.rows;
 
     successResponse(res, summary, 'Attendance summary retrieved successfully');
   } catch (error) {
@@ -198,41 +211,41 @@ exports.bulkCreateAttendance = async (req, res) => {
       return errorResponse(res, 'Site ID, date, and attendances array are required', 400);
     }
 
-    const connection = await db.getConnection();
+    const client = await db.connect();
     
     try {
-      await connection.beginTransaction();
-
-      const insertedIds = [];
+      await client.query('BEGIN');
 
       for (const attendance of attendances) {
         const { staff_id, status, notes } = attendance;
 
-        const [result] = await connection.query(
-          'INSERT INTO attendance (staff_id, site_id, date, status, notes) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = ?, notes = ?',
-          [staff_id, site_id, date, status, notes, status, notes]
+        await client.query(
+          `INSERT INTO attendance (staff_id, site_id, date, status, notes) 
+           VALUES ($1, $2, $3, $4, $5) 
+           ON CONFLICT (staff_id, site_id, date) 
+           DO UPDATE SET status = $4, notes = $5`,
+          [staff_id, site_id, date, status, notes]
         );
-
-        insertedIds.push(result.insertId);
       }
 
-      await connection.commit();
+      await client.query('COMMIT');
 
-      const [bulkAttendance] = await db.query(
+      const bulkAttendanceResult = await db.query(
         `SELECT a.*, s.staff_name, s.role, st.site_name 
          FROM attendance a 
          INNER JOIN staff s ON a.staff_id = s.id 
          INNER JOIN sites st ON a.site_id = st.id 
-         WHERE a.site_id = ? AND a.date = ?`,
+         WHERE a.site_id = $1 AND a.date = $2`,
         [site_id, date]
       );
+      const bulkAttendance = bulkAttendanceResult.rows;
 
       successResponse(res, bulkAttendance, 'Bulk attendance created successfully', 201);
     } catch (error) {
-      await connection.rollback();
+      await client.query('ROLLBACK');
       throw error;
     } finally {
-      connection.release();
+      client.release();
     }
   } catch (error) {
     console.error('Bulk create attendance error:', error);
